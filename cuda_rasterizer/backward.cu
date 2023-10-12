@@ -150,7 +150,8 @@ __global__ void computeCov2DCUDA(int P,
 	const float* view_matrix,
 	const float* dL_dconics,
 	float3* dL_dmeans,
-	float* dL_dcov)
+	float* dL_dcov,
+	glm::mat4* dL_dview)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P || !(radii[idx] > 0))
@@ -254,6 +255,18 @@ __global__ void computeCov2DCUDA(int P,
 	float dL_dJ11 = W[1][0] * dL_dT10 + W[1][1] * dL_dT11 + W[1][2] * dL_dT12;
 	float dL_dJ12 = W[2][0] * dL_dT10 + W[2][1] * dL_dT11 + W[2][2] * dL_dT12;
 
+	// Gradients of loss w.r.t. W
+	// T = W * J
+	float dL_dW00 = J[0][0] * dL_dT00;
+	float dL_dW01 = J[0][0] * dL_dT01;
+	float dL_dW02 = J[0][0] * dL_dT02;
+	float dL_dW10 = J[1][1] * dL_dT10;
+	float dL_dW11 = J[1][1] * dL_dT11;
+	float dL_dW12 = J[1][1] * dL_dT12;
+	float dL_dW20 = J[0][2] * dL_dT00 + J[1][2] * dL_dT10;
+	float dL_dW21 = J[0][2] * dL_dT01 + J[1][2] * dL_dT11;
+	float dL_dW22 = J[0][2] * dL_dT02 + J[1][2] * dL_dT12;
+
 	float tz = 1.f / t.z;
 	float tz2 = tz * tz;
 	float tz3 = tz2 * tz;
@@ -266,6 +279,39 @@ __global__ void computeCov2DCUDA(int P,
 	// Account for transformation of mean to t
 	// t = transformPoint4x3(mean, view_matrix);
 	float3 dL_dmean = transformVec4x3Transpose({ dL_dtx, dL_dty, dL_dtz }, view_matrix);
+
+	// Gradients of loss w.r.t. viewmatrix
+	float dL_dV00 = mean.x * dL_dtx;
+	float dL_dV01 = mean.x * dL_dty;
+	float dL_dV02 = mean.x * dL_dtz;
+	float dL_dV10 = mean.y * dL_dtx;
+	float dL_dV11 = mean.y * dL_dty;
+	float dL_dV12 = mean.y * dL_dtz;
+	float dL_dV20 = mean.z * dL_dtx;
+	float dL_dV21 = mean.z * dL_dty;
+	float dL_dV22 = mean.z * dL_dtz;
+	float dL_dV30 = dL_dtx;
+	float dL_dV31 = dL_dty;
+	float dL_dV32 = dL_dtz;
+
+	glm::mat4 dL_dvi;
+	dL_dvi[0][0] = dL_dV00 + dL_dW00;
+	dL_dvi[0][1] = dL_dV01 + dL_dW10;
+	dL_dvi[0][2] = dL_dV02 + dL_dW20;
+	dL_dvi[0][3] = 0.0f;
+	dL_dvi[1][0] = dL_dV10 + dL_dW01;
+	dL_dvi[1][1] = dL_dV11 + dL_dW11;
+	dL_dvi[1][2] = dL_dV12 + dL_dW21;
+	dL_dvi[1][3] = 0.0f;
+	dL_dvi[2][0] = dL_dV20 + dL_dW02;
+	dL_dvi[2][1] = dL_dV21 + dL_dW12;
+	dL_dvi[2][2] = dL_dV22 + dL_dW22;
+	dL_dvi[2][3] = 0.0f;
+	dL_dvi[3][0] = dL_dV30;
+	dL_dvi[3][1] = dL_dV31;
+	dL_dvi[3][2] = dL_dV32;
+	dL_dvi[3][3] = 0.0f;
+	dL_dview[idx] = dL_dvi;
 
 	// Gradients of loss w.r.t. Gaussian means, but only the portion 
 	// that is caused because the mean affects the covariance matrix.
@@ -361,7 +407,8 @@ __global__ void preprocessCUDA(
 	float* dL_dcov3D,
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
-	glm::vec4* dL_drot)
+	glm::vec4* dL_drot,
+	glm::mat4* dL_dproj)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P || !(radii[idx] > 0))
@@ -373,11 +420,13 @@ __global__ void preprocessCUDA(
 	float4 m_hom = transformPoint4x4(m, proj);
 	float m_w = 1.0f / (m_hom.w + 0.0000001f);
 
+	float m_w2 = m_w * m_w;
+
 	// Compute loss gradient w.r.t. 3D means due to gradients of 2D means
 	// from rendering procedure
 	glm::vec3 dL_dmean;
-	float mul1 = (proj[0] * m.x + proj[4] * m.y + proj[8] * m.z + proj[12]) * m_w * m_w;
-	float mul2 = (proj[1] * m.x + proj[5] * m.y + proj[9] * m.z + proj[13]) * m_w * m_w;
+	float mul1 = (proj[0] * m.x + proj[4] * m.y + proj[8] * m.z + proj[12]) * m_w2;
+	float mul2 = (proj[1] * m.x + proj[5] * m.y + proj[9] * m.z + proj[13]) * m_w2;
 	dL_dmean.x = (proj[0] * m_w - proj[3] * mul1) * dL_dmean2D[idx].x + (proj[1] * m_w - proj[3] * mul2) * dL_dmean2D[idx].y;
 	dL_dmean.y = (proj[4] * m_w - proj[7] * mul1) * dL_dmean2D[idx].x + (proj[5] * m_w - proj[7] * mul2) * dL_dmean2D[idx].y;
 	dL_dmean.z = (proj[8] * m_w - proj[11] * mul1) * dL_dmean2D[idx].x + (proj[9] * m_w - proj[11] * mul2) * dL_dmean2D[idx].y;
@@ -385,6 +434,26 @@ __global__ void preprocessCUDA(
 	// That's the second part of the mean gradient. Previous computation
 	// of cov2D and following SH conversion also affects it.
 	dL_dmeans[idx] += dL_dmean;
+
+	// Compute loss gradient w.r.t. projection matrix due to gradients of 2D means
+	glm::mat4 dL_dpr;
+	dL_dpr[0][0] = m.x * m_w * dL_dmean2D[idx].x;
+	dL_dpr[0][1] = m.x * m_w * dL_dmean2D[idx].y;
+	dL_dpr[0][2] = 0.0f;
+	dL_dpr[0][3] = - (m.x * m_hom.x * m_w2 * dL_dmean2D[idx].x) - (m.x * m_hom.y * m_w2 * dL_dmean2D[idx].y);
+	dL_dpr[1][0] = m.y * m_w * dL_dmean2D[idx].x;
+	dL_dpr[1][1] = m.y * m_w * dL_dmean2D[idx].y;
+	dL_dpr[1][2] = 0.0f;
+	dL_dpr[1][3] = - (m.y * m_hom.x * m_w2 * dL_dmean2D[idx].x) - (m.y * m_hom.y * m_w2 * dL_dmean2D[idx].y);
+	dL_dpr[2][0] = m.z * m_w * dL_dmean2D[idx].x;
+	dL_dpr[2][1] = m.z * m_w * dL_dmean2D[idx].y;
+	dL_dpr[2][2] = 0.0f;
+	dL_dpr[2][3] = - (m.z * m_hom.x * m_w2 * dL_dmean2D[idx].x) - (m.z * m_hom.y * m_w2 * dL_dmean2D[idx].y);
+	dL_dpr[3][0] = m_w * dL_dmean2D[idx].x;
+	dL_dpr[3][1] = m_w * dL_dmean2D[idx].y;
+	dL_dpr[3][2] = 0.0f;
+	dL_dpr[3][3] = - (m_hom.x * m_w2 * dL_dmean2D[idx].x) - (m_hom.y * m_w2 * dL_dmean2D[idx].y);
+	dL_dproj[idx] = dL_dpr;
 
 	// Compute gradient updates due to computing colors from SHs
 	if (shs)
@@ -578,7 +647,9 @@ void BACKWARD::preprocess(
 	float* dL_dcov3D,
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
-	glm::vec4* dL_drot)
+	glm::vec4* dL_drot,
+	glm::mat4* dL_dview,
+	glm::mat4* dL_dproj)
 {
 	// Propagate gradients for the path of 2D conic matrix computation. 
 	// Somewhat long, thus it is its own kernel rather than being part of 
@@ -596,7 +667,8 @@ void BACKWARD::preprocess(
 		viewmatrix,
 		dL_dconic,
 		(float3*)dL_dmean3D,
-		dL_dcov3D);
+		dL_dcov3D,
+		dL_dview);
 
 	// Propagate gradients for remaining steps: finish 3D mean gradients,
 	// propagate color gradients to SH (if desireD), propagate 3D covariance
@@ -618,7 +690,8 @@ void BACKWARD::preprocess(
 		dL_dcov3D,
 		dL_dsh,
 		dL_dscale,
-		dL_drot);
+		dL_drot,
+		dL_dproj);
 }
 
 void BACKWARD::render(
