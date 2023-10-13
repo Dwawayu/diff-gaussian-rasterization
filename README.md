@@ -1,6 +1,6 @@
 # Differential Gaussian Rasterization
 
-It is a fork that support backward of camera pose and depth.
+This is a version that supports backward camera pose and depth.
 
 # Reference
 
