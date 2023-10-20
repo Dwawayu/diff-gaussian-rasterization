@@ -399,15 +399,18 @@ __global__ void preprocessCUDA(
 	const glm::vec3* scales,
 	const glm::vec4* rotations,
 	const float scale_modifier,
+	const float* view,
 	const float* proj,
 	const glm::vec3* campos,
 	const float3* dL_dmean2D,
+	const float* dL_dz,
 	glm::vec3* dL_dmeans,
 	float* dL_dcolor,
 	float* dL_dcov3D,
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
 	glm::vec4* dL_drot,
+	glm::mat4* dL_dview,
 	glm::mat4* dL_dproj)
 {
 	auto idx = cg::this_grid().thread_rank();
@@ -430,6 +433,11 @@ __global__ void preprocessCUDA(
 	dL_dmean.x = (proj[0] * m_w - proj[3] * mul1) * dL_dmean2D[idx].x + (proj[1] * m_w - proj[3] * mul2) * dL_dmean2D[idx].y;
 	dL_dmean.y = (proj[4] * m_w - proj[7] * mul1) * dL_dmean2D[idx].x + (proj[5] * m_w - proj[7] * mul2) * dL_dmean2D[idx].y;
 	dL_dmean.z = (proj[8] * m_w - proj[11] * mul1) * dL_dmean2D[idx].x + (proj[9] * m_w - proj[11] * mul2) * dL_dmean2D[idx].y;
+
+	// Compute loss gradient w.r.t. xyz due to gradients of depth
+	dL_dmean.x += dL_dz[idx] * view[2];
+	dL_dmean.y += dL_dz[idx] * view[6];
+	dL_dmean.z += dL_dz[idx] * view[10];
 
 	// That's the second part of the mean gradient. Previous computation
 	// of cov2D and following SH conversion also affects it.
@@ -454,6 +462,12 @@ __global__ void preprocessCUDA(
 	dL_dpr[3][2] = 0.0f;
 	dL_dpr[3][3] = - (m_hom.x * m_w2 * dL_dmean2D[idx].x) - (m_hom.y * m_w2 * dL_dmean2D[idx].y);
 	dL_dproj[idx] = dL_dpr;
+
+	// Compute loss gradient w.r.t. view matrix due to gradients of depth
+	dL_dview[idx][0][2] += dL_dz[idx] * m.x;
+	dL_dview[idx][1][2] += dL_dz[idx] * m.y;
+	dL_dview[idx][2][2] += dL_dz[idx] * m.z;
+	dL_dview[idx][3][2] += dL_dz[idx];
 
 	// Compute gradient updates due to computing colors from SHs
 	if (shs)
@@ -483,7 +497,8 @@ renderCUDA(
 	float3* __restrict__ dL_dmean2D,
 	float4* __restrict__ dL_dconic2D,
 	float* __restrict__ dL_dopacity,
-	float* __restrict__ dL_dcolors)
+	float* __restrict__ dL_dcolors,
+	float* __restrict__ dL_dzs)
 {
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
@@ -608,6 +623,9 @@ renderCUDA(
 			// Update last alpha (to be used in the next iteration)
 			last_alpha = alpha;
 
+			// gradients w.r.t. z of the Gaussian in camera space
+			float dL_dz = alpha * T * dL_depth;
+
 			// Account for fact that alpha also influences how much of
 			// the background color is added if nothing left to blend
 			float bg_dot_dpixel = 0;
@@ -634,6 +652,8 @@ renderCUDA(
 
 			// Update gradients w.r.t. opacity of the Gaussian
 			atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
+
+			atomicAdd(&(dL_dzs[global_id]), dL_dz);
 		}
 	}
 }
@@ -655,6 +675,7 @@ void BACKWARD::preprocess(
 	const glm::vec3* campos,
 	const float3* dL_dmean2D,
 	const float* dL_dconic,
+	const float* dL_dz,
 	glm::vec3* dL_dmean3D,
 	float* dL_dcolor,
 	float* dL_dcov3D,
@@ -695,15 +716,18 @@ void BACKWARD::preprocess(
 		(glm::vec3*)scales,
 		(glm::vec4*)rotations,
 		scale_modifier,
+		viewmatrix,
 		projmatrix,
 		campos,
 		(float3*)dL_dmean2D,
+		dL_dz,
 		(glm::vec3*)dL_dmean3D,
 		dL_dcolor,
 		dL_dcov3D,
 		dL_dsh,
 		dL_dscale,
 		dL_drot,
+		dL_dview,
 		dL_dproj);
 }
 
@@ -724,7 +748,8 @@ void BACKWARD::render(
 	float3* dL_dmean2D,
 	float4* dL_dconic2D,
 	float* dL_dopacity,
-	float* dL_dcolors)
+	float* dL_dcolors,
+	float* dL_dz)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
 		ranges,
@@ -742,6 +767,7 @@ void BACKWARD::render(
 		dL_dmean2D,
 		dL_dconic2D,
 		dL_dopacity,
-		dL_dcolors
+		dL_dcolors,
+		dL_dz
 		);
 }
