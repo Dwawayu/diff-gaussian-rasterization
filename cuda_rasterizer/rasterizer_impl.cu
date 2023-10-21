@@ -361,17 +361,17 @@ void CudaRasterizer::Rasterizer::backward(
 	char* img_buffer,
 	const float* dL_dpix,
 	const float* dL_depths,
-	float* dL_dmean2D,
+	float* dL_dmean2D,          // need to eliminate dL_dDepth from sky
 	float* dL_dconic,
-	float* dL_dopacity,
-	float* dL_dcolor,
-	float* dL_dmean3D,
-	float* dL_dcov3D,
-	float* dL_dsh,
-	float* dL_dscale,
-	float* dL_drot,
-	float* dL_dview,
-	float* dL_dproj,
+	float* dL_dopacity,         // need to eliminate dL_dDepth from sky
+	float* dL_dcolor,           // precompute part
+	float* dL_dmean3D,          // need to eliminate dL_dDepth from sky
+	float* dL_dcov3D,           // precompute part
+	float* dL_dsh,              // need to eliminate dL_dDepth from sky
+	float* dL_dscale,           // need to eliminate dL_dDepth from sky
+	float* dL_drot,             // need to eliminate dL_dDepth from sky
+	float* dL_dview,            // need to eliminate dL_dDepth from sky
+	float* dL_dproj,            // need to eliminate dL_dDepth from sky
 	bool debug)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
@@ -409,10 +409,10 @@ void CudaRasterizer::Rasterizer::backward(
 		imgState.n_contrib,
 		dL_dpix,
 		dL_depths,
-		(float3*)dL_dmean2D,
+		(float3*)dL_dmean2D,        // need to eliminate dL_dDepth from sky
 		(float4*)dL_dconic,
-		dL_dopacity,
-		dL_dcolor), debug)
+		dL_dopacity,                // need to eliminate dL_dDepth from sky
+		dL_dcolor), debug)          // precompute part
 
 	// Take care of the rest of preprocessing. Was the precomputed covariance
 	// given to us or a scales/rot pair? If precomputed, pass that. If not,
@@ -432,14 +432,14 @@ void CudaRasterizer::Rasterizer::backward(
 		focal_x, focal_y,
 		tan_fovx, tan_fovy,
 		(glm::vec3*)campos,
-		(float3*)dL_dmean2D,
+		(float3*)dL_dmean2D,            // need to eliminate dL_dDepth from sky
 		dL_dconic,
-		(glm::vec3*)dL_dmean3D,
-		dL_dcolor,
-		dL_dcov3D,
-		dL_dsh,
-		(glm::vec3*)dL_dscale,
-		(glm::vec4*)dL_drot,
-		(glm::mat4*)dL_dview,
-		(glm::mat4*)dL_dproj), debug)
+		(glm::vec3*)dL_dmean3D,         // need to eliminate dL_dDepth from sky
+		dL_dcolor,                      // precompute part
+		dL_dcov3D,                      // precompute part
+		dL_dsh,                         // need to eliminate dL_dDepth from sky
+		(glm::vec3*)dL_dscale,          // need to eliminate dL_dDepth from sky
+		(glm::vec4*)dL_drot,            // need to eliminate dL_dDepth from sky
+		(glm::mat4*)dL_dview,           // need to eliminate dL_dDepth from sky
+		(glm::mat4*)dL_dproj), debug)   // need to eliminate dL_dDepth from sky
 }

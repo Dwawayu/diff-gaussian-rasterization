@@ -186,17 +186,17 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  reinterpret_cast<char*>(imageBuffer.contiguous().data_ptr()),
 	  dL_dout_color.contiguous().data<float>(),
 	  dL_dout_depth.contiguous().data<float>(),
-	  dL_dmeans2D.contiguous().data<float>(),
+	  dL_dmeans2D.contiguous().data<float>(),           // need to eliminate dL_dDepth from sky
 	  dL_dconic.contiguous().data<float>(),  
-	  dL_dopacity.contiguous().data<float>(),
-	  dL_dcolors.contiguous().data<float>(),
-	  dL_dmeans3D.contiguous().data<float>(),
-	  dL_dcov3D.contiguous().data<float>(),
-	  dL_dsh.contiguous().data<float>(),
-	  dL_dscales.contiguous().data<float>(),
-	  dL_drotations.contiguous().data<float>(),
-	  dL_dview.contiguous().data<float>(),
-	  dL_dproj.contiguous().data<float>(),
+	  dL_dopacity.contiguous().data<float>(),           // need to eliminate dL_dDepth from sky
+	  dL_dcolors.contiguous().data<float>(),            // precompute part
+	  dL_dmeans3D.contiguous().data<float>(),           // need to eliminate dL_dDepth from sky
+	  dL_dcov3D.contiguous().data<float>(),             // precompute part
+	  dL_dsh.contiguous().data<float>(),                // need to eliminate dL_dDepth from sky
+	  dL_dscales.contiguous().data<float>(),            // need to eliminate dL_dDepth from sky
+	  dL_drotations.contiguous().data<float>(),         // need to eliminate dL_dDepth from sky
+	  dL_dview.contiguous().data<float>(),              // need to eliminate dL_dDepth from sky
+	  dL_dproj.contiguous().data<float>(),              // need to eliminate dL_dDepth from sky
 	  debug);
   }
 
