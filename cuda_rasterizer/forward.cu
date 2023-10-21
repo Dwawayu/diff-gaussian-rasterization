@@ -355,7 +355,7 @@ renderCUDA(
 				continue;
 			}
 			
-			float weight = T * (1-alpha);
+			float weight = T * alpha;
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * weight;
