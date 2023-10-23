@@ -392,7 +392,7 @@ void CudaRasterizer::Rasterizer::backward(
 	const dim3 block(BLOCK_X, BLOCK_Y, 1);
 
 	float* dL_dz;
-	cudaMalloc((void**) &dL_dz, sizeof(float) * P);
+	cudaMalloc((void**) &dL_dz, P * sizeof(float));
 
 	// Compute loss gradients w.r.t. 2D mean position, conic matrix,
 	// opacity and RGB of Gaussians from per-pixel loss gradients.
@@ -450,4 +450,6 @@ void CudaRasterizer::Rasterizer::backward(
 		(glm::vec4*)dL_drot,
 		dL_dview,
 		dL_dproj), debug)
+
+	cudaFree(dL_dz);
 }
