@@ -294,18 +294,28 @@ __global__ void computeCov2DCUDA(int P,
 	float dL_dV31 = dL_dty;
 	float dL_dV32 = dL_dtz;
 
-	atomicAdd(&(dL_dview[0]), dL_dV00 + dL_dW00);
-	atomicAdd(&(dL_dview[1]), dL_dV01 + dL_dW10);
-	atomicAdd(&(dL_dview[2]), dL_dV02 + dL_dW20);
-	atomicAdd(&(dL_dview[4]), dL_dV10 + dL_dW01);
-	atomicAdd(&(dL_dview[5]), dL_dV11 + dL_dW11);
-	atomicAdd(&(dL_dview[6]), dL_dV12 + dL_dW21);
-	atomicAdd(&(dL_dview[8]), dL_dV20 + dL_dW02);
-	atomicAdd(&(dL_dview[9]), dL_dV21 + dL_dW12);
-	atomicAdd(&(dL_dview[10]), dL_dV22 + dL_dW22);
-	atomicAdd(&(dL_dview[12]), dL_dV30);
-	atomicAdd(&(dL_dview[13]), dL_dV31);
-	atomicAdd(&(dL_dview[14]), dL_dV32);
+	
+	__shared__ float block_dL_dview[16];
+	if (threadIdx.x < 16){
+		block_dL_dview[threadIdx.x] = 0;
+	}
+	__syncthreads();
+	atomicAdd(&(block_dL_dview[0]), dL_dV00 + dL_dW00);
+	atomicAdd(&(block_dL_dview[1]), dL_dV01 + dL_dW10);
+	atomicAdd(&(block_dL_dview[2]), dL_dV02 + dL_dW20);
+	atomicAdd(&(block_dL_dview[4]), dL_dV10 + dL_dW01);
+	atomicAdd(&(block_dL_dview[5]), dL_dV11 + dL_dW11);
+	atomicAdd(&(block_dL_dview[6]), dL_dV12 + dL_dW21);
+	atomicAdd(&(block_dL_dview[8]), dL_dV20 + dL_dW02);
+	atomicAdd(&(block_dL_dview[9]), dL_dV21 + dL_dW12);
+	atomicAdd(&(block_dL_dview[10]), dL_dV22 + dL_dW22);
+	atomicAdd(&(block_dL_dview[12]), dL_dV30);
+	atomicAdd(&(block_dL_dview[13]), dL_dV31);
+	atomicAdd(&(block_dL_dview[14]), dL_dV32);
+	__syncthreads();
+	if (threadIdx.x < 16){
+		atomicAdd(&(dL_dview[threadIdx.x]), block_dL_dview[threadIdx.x]);
+	}
 
 	// Gradients of loss w.r.t. Gaussian means, but only the portion 
 	// that is caused because the mean affects the covariance matrix.
@@ -438,24 +448,38 @@ __global__ void preprocessCUDA(
 	dL_dmeans[idx] += dL_dmean;
 
 	// Compute loss gradient w.r.t. projection matrix due to gradients of 2D means
-	atomicAdd(&(dL_dproj[0]), m.x * m_w * dL_dmean2D[idx].x);
-	atomicAdd(&(dL_dproj[1]), m.x * m_w * dL_dmean2D[idx].y);
-	atomicAdd(&(dL_dproj[3]), - (m.x * mul1 * dL_dmean2D[idx].x) - (m.x * mul2 * dL_dmean2D[idx].y));
-	atomicAdd(&(dL_dproj[4]), m.y * m_w * dL_dmean2D[idx].x);
-	atomicAdd(&(dL_dproj[5]), m.y * m_w * dL_dmean2D[idx].y);
-	atomicAdd(&(dL_dproj[7]), - (m.y * mul1 * dL_dmean2D[idx].x) - (m.y * mul2 * dL_dmean2D[idx].y));
-	atomicAdd(&(dL_dproj[8]), m.z * m_w * dL_dmean2D[idx].x);
-	atomicAdd(&(dL_dproj[9]), m.z * m_w * dL_dmean2D[idx].y);
-	atomicAdd(&(dL_dproj[11]), - (m.z * mul1 * dL_dmean2D[idx].x) - (m.z * mul2 * dL_dmean2D[idx].y));
-	atomicAdd(&(dL_dproj[12]), m_w * dL_dmean2D[idx].x);
-	atomicAdd(&(dL_dproj[13]), m_w * dL_dmean2D[idx].y);
-	atomicAdd(&(dL_dproj[15]), - (mul1 * dL_dmean2D[idx].x) - (mul2 * dL_dmean2D[idx].y));
-
+	__shared__ float block_dL_dmat[16];
+	if (threadIdx.x < 16){
+		block_dL_dmat[threadIdx.x] = 0;
+	}
+	__syncthreads();
+	atomicAdd(&(block_dL_dmat[0]), m.x * m_w * dL_dmean2D[idx].x);
+	atomicAdd(&(block_dL_dmat[1]), m.x * m_w * dL_dmean2D[idx].y);
+	atomicAdd(&(block_dL_dmat[3]), - (m.x * mul1 * dL_dmean2D[idx].x) - (m.x * mul2 * dL_dmean2D[idx].y));
+	atomicAdd(&(block_dL_dmat[4]), m.y * m_w * dL_dmean2D[idx].x);
+	atomicAdd(&(block_dL_dmat[5]), m.y * m_w * dL_dmean2D[idx].y);
+	atomicAdd(&(block_dL_dmat[7]), - (m.y * mul1 * dL_dmean2D[idx].x) - (m.y * mul2 * dL_dmean2D[idx].y));
+	atomicAdd(&(block_dL_dmat[8]), m.z * m_w * dL_dmean2D[idx].x);
+	atomicAdd(&(block_dL_dmat[9]), m.z * m_w * dL_dmean2D[idx].y);
+	atomicAdd(&(block_dL_dmat[11]), - (m.z * mul1 * dL_dmean2D[idx].x) - (m.z * mul2 * dL_dmean2D[idx].y));
+	atomicAdd(&(block_dL_dmat[12]), m_w * dL_dmean2D[idx].x);
+	atomicAdd(&(block_dL_dmat[13]), m_w * dL_dmean2D[idx].y);
+	atomicAdd(&(block_dL_dmat[15]), - (mul1 * dL_dmean2D[idx].x) - (mul2 * dL_dmean2D[idx].y));
+	__syncthreads();
+	if (threadIdx.x < 16){
+		atomicAdd(&(dL_dproj[threadIdx.x]), block_dL_dmat[threadIdx.x]);
+		block_dL_dmat[threadIdx.x] = 0;
+	}
+	__syncthreads();
 	// Compute loss gradient w.r.t. view matrix due to gradients of depth
-	atomicAdd(&(dL_dview[2]), dL_dz[idx] * m.x);
-	atomicAdd(&(dL_dview[6]), dL_dz[idx] * m.y);
-	atomicAdd(&(dL_dview[10]), dL_dz[idx] * m.z);
-	atomicAdd(&(dL_dview[14]), dL_dz[idx]);
+	atomicAdd(&(block_dL_dmat[2]), dL_dz[idx] * m.x);
+	atomicAdd(&(block_dL_dmat[6]), dL_dz[idx] * m.y);
+	atomicAdd(&(block_dL_dmat[10]), dL_dz[idx] * m.z);
+	atomicAdd(&(block_dL_dmat[14]), dL_dz[idx]);
+	__syncthreads();
+	if (threadIdx.x < 16){
+		atomicAdd(&(dL_dview[threadIdx.x]), block_dL_dmat[threadIdx.x]);
+	}
 
 	// Compute gradient updates due to computing colors from SHs
 	if (shs)
