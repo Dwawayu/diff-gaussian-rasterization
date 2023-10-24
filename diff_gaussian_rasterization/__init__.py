@@ -158,8 +158,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             grad_scales,
             grad_rotations,
             grad_cov3Ds_precomp,
-            grad_view.sum(0),
-            grad_proj.sum(0),
+            grad_view,
+            grad_proj,
             None,
         )
 
@@ -172,8 +172,6 @@ class GaussianRasterizationSettings(NamedTuple):
     tanfovy : float
     bg : torch.Tensor
     scale_modifier : float
-    # viewmatrix : torch.Tensor
-    # projmatrix : torch.Tensor
     sh_degree : int
     campos : torch.Tensor
     prefiltered : bool
