@@ -547,9 +547,9 @@ renderCUDA(
 	const int last_contributor = inside ? n_contrib[pix_id] : 0;
 
 	float accum_rec[C] = { 0 };
-	float dL_dpixel[C];
-	float dL_depth;
-	float dL_dalpha;
+	float dL_dpixel[C] = { 0 };
+	float dL_depth = 0;
+	float dL_dalpha = 0;
 	float accum_depth_rec = 0;
 	float accum_alpha_rec = 0;
 	if (inside){
