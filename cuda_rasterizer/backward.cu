@@ -501,15 +501,19 @@ renderCUDA(
 	const float2* __restrict__ points_xy_image,
 	const float4* __restrict__ conic_opacity,
 	const float* __restrict__ colors,
+	const float* __restrict__ miscs,
 	const float* __restrict__ depths,
 	const float* __restrict__ alphas,
 	const uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ dL_dpixels,
 	const float* __restrict__ dL_depths,
 	const float* __restrict__ dL_dalphas,
+	const float* __restrict__ dL_dmiscs,
+	const int channel_misc,
 	float3* __restrict__ dL_dmean2D,
 	float4* __restrict__ dL_dconic2D,
 	float* __restrict__ dL_dopacity,
+	float* __restrict__ dL_dmisc_precomp,
 	float* __restrict__ dL_dcolors,
 	float* __restrict__ dL_dzs)
 {
@@ -535,6 +539,7 @@ renderCUDA(
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_colors[C * BLOCK_SIZE];
 	__shared__ float collected_depths[BLOCK_SIZE];
+	extern __shared__ float collected_miscs[];
 
 	// In the forward, we stored the final value for T, the
 	// product of all (1 - alpha) factors. 
@@ -545,6 +550,20 @@ renderCUDA(
 	// Gaussian is known from each pixel from the forward.
 	uint32_t contributor = toDo;
 	const int last_contributor = inside ? n_contrib[pix_id] : 0;
+
+	float* accum_misc_rec = collected_miscs + channel_misc * (BLOCK_SIZE + block.thread_rank());
+	float* last_misc = collected_miscs + channel_misc * (2 * BLOCK_SIZE + block.thread_rank());
+	float* dL_dmisc = collected_miscs + channel_misc * (3 * BLOCK_SIZE + block.thread_rank());
+	// if (channel_misc > 0){
+	// 	accum_misc_rec = (float*)malloc(channel_misc * sizeof(float));
+	// 	last_misc = (float*)malloc(channel_misc * sizeof(float));
+	// 	dL_dmisc = (float*)malloc(channel_misc * sizeof(float));
+	for (int ch = 0; ch < channel_misc; ch++){
+		accum_misc_rec[ch] = 0;
+		last_misc[ch] = 0;
+		dL_dmisc[ch] = 0;
+	}
+	// }
 
 	float accum_rec[C] = { 0 };
 	float dL_dpixel[C] = { 0 };
@@ -557,6 +576,8 @@ renderCUDA(
 			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
 		dL_depth = dL_depths[pix_id];
 		dL_dalpha = dL_dalphas[pix_id];
+		for (int i = 0; i < channel_misc; i++)
+			dL_dmisc[i] = dL_dmiscs[i * H * W + pix_id];
 	}
 
 	float last_alpha = 0;
@@ -583,7 +604,9 @@ renderCUDA(
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
 			for (int i = 0; i < C; i++)
 				collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + i];
-		        collected_depths[block.thread_rank()] = depths[coll_id];
+			collected_depths[block.thread_rank()] = depths[coll_id];
+			for (int i = 0; i < channel_misc; i++)
+				collected_miscs[i * BLOCK_SIZE + block.thread_rank()] = miscs[coll_id * channel_misc + i];
 		}
 		block.sync();
 
@@ -631,6 +654,22 @@ renderCUDA(
 				// many that were affected by this Gaussian.
 				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
 			}
+
+			for (int ch = 0; ch < channel_misc; ch++)
+			{
+				const float misc = collected_miscs[ch * BLOCK_SIZE + j];
+				// Update last color (to be used in the next iteration)
+				accum_misc_rec[ch] = last_alpha * last_misc[ch] + (1.f - last_alpha) * accum_misc_rec[ch];
+				last_misc[ch] = misc;
+
+				const float dL_dchannel = dL_dmisc[ch];
+				dL_dopa += (misc - accum_misc_rec[ch]) * dL_dchannel;
+				// Update the gradients w.r.t. color of the Gaussian. 
+				// Atomic, since this pixel is just one of potentially
+				// many that were affected by this Gaussian.
+				atomicAdd(&(dL_dmisc_precomp[global_id * channel_misc + ch]), dchannel_dcolor * dL_dchannel);
+			}
+
 			const float c_d = collected_depths[j];
 			accum_depth_rec = last_alpha * last_depth + (1.f - last_alpha) * accum_depth_rec;
 			last_depth = c_d;
@@ -644,7 +683,7 @@ renderCUDA(
 			last_alpha = alpha;
 
 			// gradients w.r.t. z of the Gaussian in camera space
-			float dL_dz = alpha * T * dL_depth;
+			float dL_dz = dchannel_dcolor * dL_depth;
 
 			// Account for fact that alpha also influences how much of
 			// the background color is added if nothing left to blend
@@ -760,19 +799,23 @@ void BACKWARD::render(
 	const float2* means2D,
 	const float4* conic_opacity,
 	const float* colors,
+	const float* miscs,
 	const float* depths,
 	const float* alphas,
 	const uint32_t* n_contrib,
 	const float* dL_dpixels,
 	const float* dL_depths,
 	const float* dL_dalphas,
+	const float* dL_dmiscs,
+	const int channel_misc,
 	float3* dL_dmean2D,
 	float4* dL_dconic2D,
 	float* dL_dopacity,
+	float* dL_dmisc_precomp,
 	float* dL_dcolors,
 	float* dL_dz)
 {
-	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
+	renderCUDA<NUM_CHANNELS> << <grid, block, channel_misc * BLOCK_SIZE * sizeof(float) * 4>> >(
 		ranges,
 		point_list,
 		W, H,
@@ -780,15 +823,19 @@ void BACKWARD::render(
 		means2D,
 		conic_opacity,
 		colors,
+		miscs,
 		depths,
 		alphas,
 		n_contrib,
 		dL_dpixels,
 		dL_depths,
 		dL_dalphas,
+		dL_dmiscs,
+		channel_misc,
 		dL_dmean2D,
 		dL_dconic2D,
 		dL_dopacity,
+		dL_dmisc_precomp,
 		dL_dcolors,
 		dL_dz
 		);

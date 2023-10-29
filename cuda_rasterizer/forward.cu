@@ -162,7 +162,6 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const float* shs,
 	bool* clamped,
 	const float* cov3D_precomp,
-	const float* colors_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
 	const glm::vec3* cam_pos,
@@ -236,15 +235,12 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
 		return;
 
-	// If colors have been precomputed, use them, otherwise convert
-	// spherical harmonics coefficients to RGB color.
-	if (colors_precomp == nullptr)
-	{
-		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
-		rgb[idx * C + 0] = result.x;
-		rgb[idx * C + 1] = result.y;
-		rgb[idx * C + 2] = result.z;
-	}
+	// colors_precomp is used for additional input,
+	// directly convert spherical harmonics coefficients to RGB color.
+	glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
+	rgb[idx * C + 0] = result.x;
+	rgb[idx * C + 1] = result.y;
+	rgb[idx * C + 2] = result.z;
 
 	// Store some useful helper data for the next steps.
 	depths[idx] = p_view.z;
@@ -266,13 +262,16 @@ renderCUDA(
 	int W, int H,
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
+	const float* __restrict__ features_misc,
 	const float* __restrict__ depths,
 	const float4* __restrict__ conic_opacity,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
+	const int channel_misc,
 	float* __restrict__ out_color,
 	float* __restrict__ out_depth,
-	float* __restrict__ out_alpha)
+	float* __restrict__ out_alpha,
+	float* __restrict__ out_misc)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -304,7 +303,13 @@ renderCUDA(
 	uint32_t last_contributor = 0;
 	float C[CHANNELS] = { 0 };
 	float D = { 0 };
-
+	
+	extern __shared__ float acc_miscs[];
+	// float misc[3] = { 0 };
+	float* misc = acc_miscs + channel_misc * block.thread_rank();
+	for (int ch = 0; ch < channel_misc; ch++)
+		misc[ch] = 0;
+	
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
 	{
@@ -354,9 +359,12 @@ renderCUDA(
 			}
 
 			// Eq. (3) from 3D Gaussian splatting paper.
+			float weight = alpha * T;
 			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
-			D += depths[collected_id[j]] * alpha * T;
+				C[ch] += features[collected_id[j] * CHANNELS + ch] * weight;
+			D += depths[collected_id[j]] * weight;
+			for (int ch = 0; ch < channel_misc; ch++)
+				misc[ch] += features_misc[collected_id[j] * channel_misc + ch] * weight;
 
 			T = test_T;
 
@@ -375,7 +383,10 @@ renderCUDA(
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
 		out_alpha[pix_id] = 1.0f - T;
 		out_depth[pix_id] = D;
+		for (int ch = 0; ch < channel_misc; ch++)
+			out_misc[ch * H * W + pix_id] = misc[ch];
 	}
+	// free(misc);
 }
 
 void FORWARD::render(
@@ -385,27 +396,33 @@ void FORWARD::render(
 	int W, int H,
 	const float2* means2D,
 	const float* colors,
+	const float* colors_precomp,
 	const float* depths,
 	const float4* conic_opacity,
 	uint32_t* n_contrib,
 	const float* bg_color,
+	const int channel_misc,
 	float* out_color,
 	float* out_depth,
-	float* out_alpha)
+	float* out_alpha,
+	float* out_misc)
 {
-	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
+	renderCUDA<NUM_CHANNELS> << <grid, block, channel_misc * BLOCK_SIZE * sizeof(float)>> > (
 		ranges,
 		point_list,
 		W, H,
 		means2D,
 		colors,
+		colors_precomp,
 		depths,
 		conic_opacity,
 		n_contrib,
 		bg_color,
+		channel_misc,
 		out_color,
 		out_depth,
-		out_alpha);
+		out_alpha,
+		out_misc);
 }
 
 void FORWARD::preprocess(int P, int D, int M,
@@ -417,7 +434,6 @@ void FORWARD::preprocess(int P, int D, int M,
 	const float* shs,
 	bool* clamped,
 	const float* cov3D_precomp,
-	const float* colors_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
 	const glm::vec3* cam_pos,
@@ -444,7 +460,6 @@ void FORWARD::preprocess(int P, int D, int M,
 		shs,
 		clamped,
 		cov3D_precomp,
-		colors_precomp,
 		viewmatrix, 
 		projmatrix,
 		cam_pos,
