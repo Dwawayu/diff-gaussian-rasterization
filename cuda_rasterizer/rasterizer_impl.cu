@@ -447,4 +447,5 @@ void CudaRasterizer::Rasterizer::backward(
 		(glm::vec4*)dL_drot,
 		(glm::mat4*)dL_dview,
 		(glm::mat4*)dL_dproj), debug)
+    cudaFree(dL_dz);
 }
